@@ -78,6 +78,7 @@ struct usb_dev_state {
 	int not_yet_resumed;
 	bool suspend_allowed;
 	bool privileges_dropped;
+	bool revoked;
 };
 
 struct usb_memory {
@@ -183,6 +184,13 @@ static int connected(struct usb_dev_state *ps)
 			ps->dev->state != USB_STATE_NOTATTACHED);
 }
 
+static int disconnected_or_revoked(struct usb_dev_state *ps)
+{
+	return (list_empty(&ps->list) ||
+			ps->dev->state == USB_STATE_NOTATTACHED ||
+			ps->revoked);
+}
+
 static void dec_usb_memory_use_count(struct usb_memory *usbm, int *count)
 {
 	struct usb_dev_state *ps = usbm->ps;
@@ -236,6 +244,9 @@ static int usbdev_mmap(struct file *file, struct vm_area_struct *vma)
 	unsigned long flags;
 	dma_addr_t dma_handle;
 	int ret;
+
+	if (disconnected_or_revoked(ps))
+		return -ENODEV;
 
 	ret = usbfs_increase_memory_usage(size + sizeof(struct usb_memory));
 	if (ret)
@@ -310,7 +321,7 @@ static ssize_t usbdev_read(struct file *file, char __user *buf, size_t nbytes,
 
 	pos = *ppos;
 	usb_lock_device(dev);
-	if (!connected(ps)) {
+	if (disconnected_or_revoked(ps)) {
 		ret = -ENODEV;
 		goto err;
 	} else if (pos < 0) {
@@ -2315,7 +2326,7 @@ static int proc_ioctl(struct usb_dev_state *ps, struct usbdevfs_ioctl *ctl)
 	if (ps->privileges_dropped)
 		return -EACCES;
 
-	if (!connected(ps))
+	if (disconnected_or_revoked(ps))
 		return -ENODEV;
 
 	/* alloc buffer */
@@ -2555,7 +2566,7 @@ static int proc_forbid_suspend(struct usb_dev_state *ps)
 
 static int proc_allow_suspend(struct usb_dev_state *ps)
 {
-	if (!connected(ps))
+	if (disconnected_or_revoked(ps))
 		return -ENODEV;
 
 	WRITE_ONCE(ps->not_yet_resumed, 1);
@@ -2578,6 +2589,154 @@ static int proc_wait_for_resume(struct usb_dev_state *ps)
 	if (ret != 0)
 		return -EINTR;
 	return proc_forbid_suspend(ps);
+}
+
+static int usbdev_revoke(struct usb_dev_state *ps)
+{
+	struct usb_device *dev = ps->dev;
+	unsigned int ifnum;
+	struct async *as;
+
+	if (ps->revoked)
+		return -ENODEV;
+
+	snoop(&dev->dev, "%s: REVOKE by PID %d: %s\n", __func__,
+	      task_pid_nr(current), current->comm);
+
+	ps->revoked = true;
+
+	for (ifnum = 0; ps->ifclaimed && ifnum < 8*sizeof(ps->ifclaimed);
+			ifnum++) {
+		if (test_bit(ifnum, &ps->ifclaimed))
+			releaseintf(ps, ifnum);
+	}
+	destroy_all_async(ps);
+
+	as = async_getcompleted(ps);
+	while (as) {
+		free_async(as);
+		as = async_getcompleted(ps);
+	}
+
+	wake_up(&ps->wait);
+
+	return 0;
+}
+
+int usb_revoke_for_device(int device_fd, kuid_t user)
+{
+	struct usb_device *udev = NULL;
+	struct inode *inode;
+	struct usb_dev_state *ps;
+	struct fd f;
+	int ret;
+
+	f = fdget(device_fd);
+	if (!f.file)
+		return -EBADFD;
+
+	/* Verify we have a USB device */
+	inode = file_inode(f.file);
+	if (!inode || imajor(inode) != USB_DEVICE_MAJOR) {
+		fdput(f);
+		return -EBADFD;
+	}
+
+	/* Find it in the existing USB devices */
+	udev = usbdev_lookup_by_devt(inode->i_rdev);
+	if (!udev) {
+		fdput(f);
+		return -ENODEV;
+	}
+
+	usb_lock_device(udev);
+	ret = -ENODEV;
+
+	list_for_each_entry(ps, &udev->filelist, list) {
+		if (uid_valid(user) &&
+		    (!ps || !ps->cred || !uid_eq(ps->cred->euid, user))) {
+			printk(KERN_ERR "uid was valid, but no match, continuing\n");
+			continue;
+		}
+
+		printk(KERN_ERR "revoking\n");
+		if (usbdev_revoke(ps) == 0)
+			ret = 0;
+	}
+
+	fdput(f);
+	usb_unlock_device(udev);
+
+	return ret;
+}
+
+enum {
+	USB_REVOKE_MATCH_USER_NS,
+	USB_REVOKE_MATCH_USER
+};
+
+struct usb_revoke_match {
+	int match_type;
+	void *data;
+	bool matched;
+};
+
+static int
+__usb_revoke(struct usb_device *udev, void *data)
+{
+	struct usb_revoke_match *match = data;
+	struct usb_dev_state *ps;
+
+	usb_lock_device(udev);
+
+	list_for_each_entry(ps, &udev->filelist, list) {
+		kuid_t *user;
+		if (!ps || !ps->cred) {
+			printk(KERN_ERR "no ps or cred continuing\n");
+			continue;
+		}
+		switch (match->match_type) {
+		case USB_REVOKE_MATCH_USER_NS:
+			if (ps->cred->user_ns != match->data)
+				continue;
+			break;
+		case USB_REVOKE_MATCH_USER:
+			user = match->data;
+			if (!uid_eq(*user, ps->cred->euid))
+				continue;
+			break;
+		}
+		match->matched = true;
+		printk(KERN_ERR "revoking\n");
+		usbdev_revoke(ps);
+	}
+
+	usb_unlock_device(udev);
+	return 0;
+}
+
+int usb_revoke_for_user(kuid_t user)
+{
+	struct usb_revoke_match match;
+
+	match.match_type = USB_REVOKE_MATCH_USER;
+	match.data = &user;
+	match.matched = false;
+
+	usb_for_each_dev(&match, __usb_revoke);
+	return match.matched ? 0 : -ENODEV;
+}
+
+int usb_revoke_for_userns(struct user_namespace *ns)
+{
+	struct usb_revoke_match match;
+
+	match.match_type = USB_REVOKE_MATCH_USER_NS;
+	match.data = ns;
+	match.matched = false;
+
+	usb_for_each_dev(&match, __usb_revoke);
+	return match.matched ? 0 : -ENODEV;
 }
 
 /*
@@ -2623,7 +2782,7 @@ static long usbdev_do_ioctl(struct file *file, unsigned int cmd,
 #endif
 	}
 
-	if (!connected(ps)) {
+	if (disconnected_or_revoked(ps)) {
 		usb_unlock_device(dev);
 		return -ENODEV;
 	}
