@@ -38,6 +38,8 @@
 #include <linux/workqueue.h>
 #include <linux/debugfs.h>
 #include <linux/usb/of.h>
+#include <linux/btf.h>
+#include <linux/btf_ids.h>
 
 #include <asm/io.h>
 #include <linux/scatterlist.h>
@@ -436,6 +438,34 @@ static int usb_dev_uevent(struct device *dev, struct kobj_uevent_env *env)
 		return -ENOMEM;
 
 	return 0;
+}
+
+noinline int
+usb_revoke_device(int device_fd, int namespace_fd, int uid)
+{
+	struct user_namespace *ns = NULL;
+	kuid_t user = INVALID_UID;
+
+	printk(KERN_ERR "device fd: %d namespace_fd: %d uid: %d\n",
+	       device_fd, namespace_fd, uid);
+
+	if (namespace_fd >= 0)
+		ns = get_user_ns_by_fd(namespace_fd);
+	if (uid >= 0)
+		user = make_kuid(ns ? : current_user_ns(), uid);
+
+	/* Check if we have either a device, or a user to filter by */
+	if (device_fd < 0 && !uid_valid(user) && ns == NULL) {
+		printk(KERN_ERR "invalid uid request: %d %d\n",
+		       namespace_fd, uid);
+		return -EINVAL;
+	}
+
+	if (device_fd >= 0)
+		return usb_revoke_for_device(device_fd, user);
+	if (uid_valid(user))
+		return usb_revoke_for_user(user);
+	return usb_revoke_for_userns(ns);
 }
 
 #ifdef	CONFIG_PM
@@ -1004,6 +1034,15 @@ static void usb_debugfs_cleanup(void)
 /*
  * Init
  */
+BTF_SET8_START(usbdev_kfunc_ids)
+BTF_ID_FLAGS(func, usb_revoke_device)
+BTF_SET8_END(usbdev_kfunc_ids)
+
+static const struct btf_kfunc_id_set usbdev_kfunc_set = {
+	.owner     = THIS_MODULE,
+	.set = &usbdev_kfunc_ids,
+};
+
 static int __init usb_init(void)
 {
 	int retval;
@@ -1035,9 +1074,14 @@ static int __init usb_init(void)
 	if (retval)
 		goto hub_init_failed;
 	retval = usb_register_device_driver(&usb_generic_driver, THIS_MODULE);
+	if (retval)
+		goto register_failed;
+	retval = register_btf_kfunc_id_set(BPF_PROG_TYPE_SYSCALL, &usbdev_kfunc_set);
 	if (!retval)
 		goto out;
+	usb_deregister_device_driver(&usb_generic_driver);
 
+register_failed:
 	usb_hub_cleanup();
 hub_init_failed:
 	usb_devio_cleanup();
