@@ -149,6 +149,7 @@ static inline struct user_namespace *get_user_ns(struct user_namespace *ns)
 extern int create_user_ns(struct cred *new);
 extern int unshare_userns(unsigned long unshare_flags, struct cred **new_cred);
 extern void __put_user_ns(struct user_namespace *ns);
+extern struct user_namespace *get_user_ns_by_fd(int fd);
 
 static inline void put_user_ns(struct user_namespace *ns)
 {
@@ -213,6 +214,11 @@ static inline bool current_in_userns(const struct user_namespace *target_ns)
 static inline struct ns_common *ns_get_owner(struct ns_common *ns)
 {
 	return ERR_PTR(-EPERM);
+}
+
+static inline struct user_namespace *get_user_ns_by_fd(int fd)
+{
+	return ERR_PTR(-EINVAL);
 }
 #endif
 

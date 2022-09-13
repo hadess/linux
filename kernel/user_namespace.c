@@ -14,6 +14,7 @@
 #include <linux/key-type.h>
 #include <keys/user-type.h>
 #include <linux/seq_file.h>
+#include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/uaccess.h>
 #include <linux/ctype.h>
@@ -1384,6 +1385,27 @@ struct ns_common *ns_get_owner(struct ns_common *ns)
 
 	return &get_user_ns(owner)->ns;
 }
+
+struct user_namespace *get_user_ns_by_fd(int fd)
+{
+	struct file *file;
+	struct ns_common *ns;
+	struct user_namespace *user;
+
+	file = proc_ns_fget(fd);
+	if (IS_ERR(file))
+		return ERR_CAST(file);
+
+	ns = get_proc_ns(file_inode(file));
+	if (ns->ops == &userns_operations)
+		user = get_user_ns(container_of(ns, struct user_namespace, ns));
+	else
+		user = ERR_PTR(-EINVAL);
+
+	fput(file);
+	return user;
+}
+EXPORT_SYMBOL_GPL(get_user_ns_by_fd);
 
 static struct user_namespace *userns_owner(struct ns_common *ns)
 {
