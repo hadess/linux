@@ -929,7 +929,7 @@ static int hidpp_root_get_protocol_version(struct hidpp_device *hidpp)
 	if (ret)
 		return ret;
 
-	if (response.rap.params[2] != ping_byte) {
+	if (response.rap.params[2] != (ping_byte & ~BIT(7))) {
 		hid_err(hidpp->hid_dev, "%s: ping mismatch 0x%02x != 0x%02x\n",
 			__func__, response.rap.params[2], ping_byte);
 		return -EPROTO;
