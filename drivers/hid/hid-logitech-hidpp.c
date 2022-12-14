@@ -468,6 +468,27 @@ static void hidpp_prefix_name(char **name, int name_length)
 	*name = new_name;
 }
 
+/*
+ * Updates the USB wireless_status based on whether the headset
+ * is turned on and reachable.
+ */
+static void hidpp_update_usb_wireless_status(struct hidpp_device *hidpp)
+{
+	struct hid_device *hdev = hidpp->hid_dev;
+	struct usb_interface *intf;
+
+	if (!hid_is_usb(hdev))
+		return;
+	//FIXME
+	if (hdev->product != 0x0a87)
+		return;
+
+	intf = to_usb_interface(hdev->dev.parent);
+	usb_set_wireless_status(intf, hidpp->battery.online ?
+				USB_WIRELESS_STATUS_CONNECTED :
+				USB_WIRELESS_STATUS_DISCONNECTED);
+}
+
 /**
  * hidpp_scroll_counter_handle_scroll() - Send high- and low-resolution scroll
  *                                        events given a high-resolution wheel
@@ -1876,6 +1897,7 @@ static int hidpp20_query_adc_measurement_info_1f20(struct hidpp_device *hidpp)
 								 &hidpp->battery.voltage);
 	hidpp->battery.capacity = hidpp20_map_adc_measurement_1f20_capacity(hidpp->hid_dev,
 									    hidpp->battery.voltage);
+	hidpp_update_usb_wireless_status(hidpp);
 
 	return 0;
 }
@@ -1900,6 +1922,7 @@ static int hidpp20_adc_measurement_event_1f20(struct hidpp_device *hidpp,
 		hidpp->battery.capacity = hidpp20_map_adc_measurement_1f20_capacity(hidpp->hid_dev, voltage);
 		if (hidpp->battery.ps)
 			power_supply_changed(hidpp->battery.ps);
+		hidpp_update_usb_wireless_status(hidpp);
 	}
 	return 0;
 }
@@ -4160,6 +4183,7 @@ static void hidpp_connect_event(struct hidpp_device *hidpp)
 		}
 	}
 
+	//FIXME init sidetone
 	hidpp_initialize_battery(hidpp);
 	hidpp_initialize_hires_scroll(hidpp);
 
