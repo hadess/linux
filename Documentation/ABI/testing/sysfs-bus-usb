@@ -166,6 +166,18 @@ Description:
 		The file will be present for all speeds of USB devices, and will
 		always read "no" for USB 1.1 and USB 2.0 devices.
 
+What:		/sys/bus/usb/devices/<INTERFACE>/wireless_status
+Date:		January 2023
+Contact:	Bastien Nocera <hadess@hadess.net>
+Description:
+		Some USB devices use a small USB receiver coupled with a larger
+		wireless device, usually communicating using proprietary
+		wireless protocols. This attribute will read either "connected"
+		or "disconnected" depending on whether the emitter is turned on,
+		in range and connected, on the interface which is used to detect
+		this state. If the device does not use a receiver/emitter combo,
+		then this attribute will not exist.
+
 What:		/sys/bus/usb/devices/.../<hub_interface>/port<X>
 Date:		August 2012
 Contact:	Lan Tianyu <tianyu.lan@intel.com>
