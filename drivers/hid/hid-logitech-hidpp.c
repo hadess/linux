@@ -295,6 +295,7 @@ static int hidpp_send_message_sync(struct hidpp_device *hidpp,
 	 */
 	*response = *message;
 
+retry:
 	ret = __hidpp_send_report(hidpp->hid_dev, message);
 
 	if (ret) {
@@ -321,6 +322,10 @@ static int hidpp_send_message_sync(struct hidpp_device *hidpp,
 			response->report_id == REPORT_ID_HIDPP_VERY_LONG) &&
 			response->fap.feature_index == HIDPP20_ERROR) {
 		ret = response->fap.params[1];
+		if (ret == HIDPP20_ERROR_BUSY) {
+			dbg_hid("%s:got busy hidpp 2.0 error %02X, retrying\n", __func__, ret);
+			goto retry;
+		}
 		dbg_hid("%s:got hidpp 2.0 error %02X\n", __func__, ret);
 		goto exit;
 	}
