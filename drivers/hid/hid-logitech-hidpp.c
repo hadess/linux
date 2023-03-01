@@ -970,6 +970,74 @@ print_version:
 }
 
 /* -------------------------------------------------------------------------- */
+/* 0x0003: Device Information                                                 */
+/* -------------------------------------------------------------------------- */
+
+#define HIDPP_PAGE_DEVICE_INFORMATION 0x0003
+
+#define CMD_GET_DEVICE_SERIAL_NUMBER 0x02
+
+/* The serial number shall always be 12 bytes. */
+#define SERIAL_NUMBER_LEN 12
+
+static int hidpp_get_serial(struct hidpp_device *hidpp, u32 *serial)
+{
+	struct hidpp_report response;
+	u8 feature_type;
+	u8 feature_index;
+	int ret, i;
+	bool all_zeroes;
+
+	ret = hidpp_root_get_feature(hidpp, HIDPP_PAGE_DEVICE_INFORMATION,
+				     &feature_index,
+				     &feature_type);
+	if (ret)
+		return ret;
+
+	/* This command is only available in "Device Information" version 4 */
+	ret = hidpp_send_fap_command_sync(hidpp, feature_index,
+					  CMD_GET_DEVICE_SERIAL_NUMBER,
+					  NULL, 0, &response);
+	if (ret)
+		return ret;
+
+	/* If the value is not set or the device doesn’t support the
+	 * serialNumber capability, the returned default value is 12
+	 * bytes set to 0 (binary) */
+	all_zeroes = true;
+	for (i = 0; i < SERIAL_NUMBER_LEN; i++)
+		if (response.fap.params[i] != 0)
+			all_zeroes = false;
+	if (all_zeroes)
+		return 1;
+
+	/* Truncates the 12-byte Base34-encoded serial number
+	 * to the same format gathered from a Unifying Device extended
+	 * pairing info so the serials match.
+	 *
+	 * See also hidpp_unifying_get_serial() */
+	*serial = *((u32 *)&response.rap.params[1]);
+	return 0;
+}
+
+static int hidpp_serial_init(struct hidpp_device *hidpp)
+{
+	struct hid_device *hdev = hidpp->hid_dev;
+	u32 serial;
+	int ret;
+
+	ret = hidpp_get_serial(hidpp, &serial);
+	if (ret)
+		return ret;
+
+	snprintf(hdev->uniq, sizeof(hdev->uniq), "%04x-%4phD",
+		 hdev->product, &serial);
+	dbg_hid("HID++ DeviceInformation: Got serial: %s\n", hdev->uniq);
+
+	return 0;
+}
+
+/* -------------------------------------------------------------------------- */
 /* 0x0005: GetDeviceNameType                                                  */
 /* -------------------------------------------------------------------------- */
 
@@ -4398,6 +4466,8 @@ static int hidpp_probe(struct hid_device *hdev, const struct hid_device_id *id)
 
 	if (hidpp->quirks & HIDPP_QUIRK_UNIFYING)
 		hidpp_unifying_init(hidpp);
+	else if (hid_is_usb(hidpp->hid_dev))
+		hidpp_serial_init(hidpp);
 
 	connected = hidpp_root_get_protocol_version(hidpp) == 0;
 	atomic_set(&hidpp->connected, connected);
