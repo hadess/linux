@@ -1401,8 +1401,9 @@ static int usbhid_probe(struct usb_interface *intf, const struct usb_device_id *
 		snprintf(hid->phys + len, sizeof(hid->phys) - len,
 			 "%d", intf->altsetting[0].desc.bInterfaceNumber);
 
-	if (usb_string(dev, dev->descriptor.iSerialNumber, hid->uniq, 64) <= 0)
-		hid->uniq[0] = 0;
+	if (!strlen(hid->uniq))
+		if (usb_string(dev, dev->descriptor.iSerialNumber, hid->uniq, 64) <= 0)
+			hid->uniq[0] = 0;
 
 	usbhid = kzalloc(sizeof(*usbhid), GFP_KERNEL);
 	if (usbhid == NULL) {
