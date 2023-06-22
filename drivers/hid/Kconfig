@@ -1052,6 +1052,11 @@ config HID_STEELSERIES
 	help
 	Support for Steelseries SRW-S1 steering wheel
 
+config HID_STEELSERIES_HEADSET
+	tristate "Steelseries headsets support"
+	help
+	Support for Steelseries headsets.
+
 config HID_SUNPLUS
 	tristate "Sunplus wireless desktop"
 	help
