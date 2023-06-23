@@ -647,6 +647,9 @@ static const struct hid_device_id steelseries_devices[] = {
 	{ /* SteelSeries Arctis 1 Wireless for XBox */
 	  HID_USB_DEVICE(USB_VENDOR_ID_STEELSERIES, 0x12b6),
 	.driver_data = STEELSERIES_ARCTIS_1 },
+	{ /* SteelSeries Arctis 1 Wireless */
+	  HID_USB_DEVICE(USB_VENDOR_ID_STEELSERIES, 0x12b3),
+	.driver_data = STEELSERIES_ARCTIS_1 },
 
 	{ }
 };
